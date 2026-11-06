@@ -1,54 +1,42 @@
 name: Build Robodel APK
-
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
-
+    branches: [ "main", "master" ]
 jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Unpack the Robodel project from the zip
+      - name: Unpack the Robodel project from the newest zip
         run: |
           mkdir app
-          unzip -q Robodel_Android_8.65.zip -d app
-
+          unzip -q "$(ls Robodel_Android_*.zip | sort -V | tail -1)" -d app
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
+        with: { node-version: 22 }
       - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 21
-
-      # The GitHub runner already contains the Android SDK, so no extra SDK step is needed.
+        with: { distribution: temurin, java-version: 21 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.13" }
       - name: Accept Android licences
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-
-      - name: Install packages
+      - run: npm ci
         working-directory: app
-        run: npm ci
-
-      - name: Copy the Robodel page into the app
+      - run: node scripts/prepare.js
         working-directory: app
-        run: node scripts/prepare.js
-
-      - name: Sync the Android project
+      - run: npx cap sync android
         working-directory: app
-        run: npx cap sync android
-
-      - name: Build the APK
-        working-directory: app/android
+      - name: Build the APK (with live Settrade support)
+        id: full
+        continue-on-error: true
         run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Keep the APK
-        uses: actions/upload-artifact@v4
+          cd app/android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Build again without the Settrade library (only if the first build failed)
+        if: steps.full.outcome == 'failure'
+        run: |
+          echo "::warning::The Settrade library could not be added. This APK works but has NO live Settrade prices or orders."
+          cd app/android && ./gradlew assembleDebug --no-daemon -PnoSettrade
+      - uses: actions/upload-artifact@v4
         with:
           name: Robodel-APK
           path: app/android/app/build/outputs/apk/debug/app-debug.apk
